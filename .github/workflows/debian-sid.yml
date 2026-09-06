@@ -149,7 +149,7 @@ jobs:
               UPSTREAM_VER=\$(dpkg-parsechangelog -S Version | sed 's/-.*//' | sed 's/~.*//')
               
               echo '=== Building SOURCE and Binary ==='
-              tar --exclude=debian -czf ../partclone_\${UPSTREAM_VER}.orig.tar.gz .
+              tar --exclude='./debian' --exclude='./.git' -czf ../partclone_${UPSTREAM_VER}.orig.tar.gz .
               dpkg-buildpackage -us -uc
               
               mkdir -p /src/output-debs
