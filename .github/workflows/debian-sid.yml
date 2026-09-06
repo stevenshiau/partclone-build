@@ -1,0 +1,210 @@
+name: Debian Sid Auto-Build
+
+on:
+  push:
+    branches: [ main, master ]
+    paths-ignore:
+      - '.github/workflows/**'
+  schedule:
+    - cron: '37 20 * * *' # Avoid peak hours, runs around 04:37 AM Taipei Time
+  workflow_dispatch:
+
+env:
+  FORCE_BUILD: "false"
+
+jobs:
+  check-triggers:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_build: ${{ steps.decision.outputs.needs_build }}
+      latest_tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - name: Fetch Upstream Tag and Dependencies
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 1. Fetch Latest Upstream Tag for partclone
+          LATEST_TAG=$(gh api repos/Thomas-Tsai/partclone/tags --jq '.[0].name')
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          
+          # 2. Fetch Latest Sid Versions for partclone core dependencies
+          # [!] Replace these packages with partclone's actual Build-Depends (e.g., uuid-dev, libblkid-dev, etc.)
+          BASE_URL="https://api.ftp-master.debian.org/madison"
+          DEP1_VER=$(curl -s "${BASE_URL}?package=uuid-dev&s=sid&text=on" | awk '{print $3}' | head -n 1)
+          DEP2_VER=$(curl -s "${BASE_URL}?package=libblkid-dev&s=sid&text=on" | awk '{print $3}' | head -n 1)
+          
+          # 3. Create Combined Fingerprint
+          FINGERPRINT="sid-tag${LATEST_TAG}-dep1${DEP1_VER}-dep2${DEP2_VER}"
+          echo "Combined Fingerprint: $FINGERPRINT"
+          echo "fingerprint=$FINGERPRINT" >> $GITHUB_OUTPUT
+
+      - name: Check Build Cache
+        id: cache-check
+        uses: actions/cache@v4
+        with:
+          path: last-build-fingerprint.txt
+          key: build-cache-sid-${{ steps.check.outputs.fingerprint }}
+
+      - name: Decide to Build
+        id: decision
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "${{ steps.cache-check.outputs.cache-hit }}" != "true" ]] || [[ "${{ env.FORCE_BUILD }}" == "true" ]]; then
+            echo "needs_build=true" >> $GITHUB_OUTPUT
+            echo "${{ steps.check.outputs.fingerprint }}" > last-build-fingerprint.txt
+          else
+            echo "needs_build=false" >> $GITHUB_OUTPUT
+            echo "This exact combination of upstream tag and dependencies has already been built."
+          fi
+
+  build:
+    needs: check-triggers
+    if: needs.check-triggers.outputs.needs_build == 'true'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64, riscv64]
+        
+    steps:
+      - name: Checkout Upstream Code
+        uses: actions/checkout@v4
+        with:
+          repository: 'Thomas-Tsai/partclone'
+          ref: ${{ needs.check-triggers.outputs.latest_tag }}
+          path: 'partclone-src'
+          fetch-depth: 0 
+
+      - name: Checkout Packaging Files
+        uses: actions/checkout@v4
+        with:
+          path: 'partclone-build'
+
+      - name: Merge Packaging with Source
+        run: |
+          cp -a partclone-build/debian/ partclone-src/debian/
+
+      - name: Set up QEMU
+        if: matrix.arch != 'amd64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: ${{ matrix.arch }}
+
+      - name: Build Debian Package
+        run: |
+          docker run --rm \
+            --platform linux/${{ matrix.arch }} \
+            -v ${{ github.workspace }}/partclone-src:/src \
+            -e DEBFULLNAME="GitHub Actions CI" \
+            -e DEBEMAIL="actions@github.com" \
+            -e DEB_BUILD_OPTIONS="noautodbgsym" \
+            -e UPSTREAM_TAG="${{ needs.check-triggers.outputs.latest_tag }}" \
+            debian:sid /bin/bash -c "
+              set -e
+              export DEBIAN_FRONTEND=noninteractive
+              export EDITOR=/bin/true  # Prevent gbp dch from crashing due to missing editor
+              
+              # Completely forbid APT from installing systemd v260+ to prevent QEMU crashes
+              printf \"Package: systemd systemd-sysv libsystemd0 udev libudev1\nPin: version 260*\nPin-Priority: -1\n\" > /etc/apt/preferences.d/prevent-systemd-260
+              
+              apt-get update
+              apt-get dist-upgrade -y || true
+              apt-get autoremove -y
+              
+              # Install base packaging tools
+              apt-get install -y --no-install-recommends devscripts equivs build-essential dh-python git-buildpackage git tar libdistro-info-perl
+              
+              mkdir -p /build
+              cp -a /src/. /build/
+              cd /build
+              
+              git config --global --add safe.directory /build
+              git config --global user.name \"\$DEBFULLNAME\"
+              git config --global user.email \"\$DEBEMAIL\"
+              
+              # Create a branch from the detached HEAD tag to safely modify the source
+              git checkout -b auto-build-branch
+              
+              echo '=== Injecting Upstream Version Tag ==='
+              CLEAN_VER=\$(echo \$UPSTREAM_TAG | sed 's/^v//')
+              git archive --format=tar HEAD | tar xf -
+              
+              # If partclone uses Autotools, generating the configure script might be needed
+              # autoreconf -fi || true
+              
+              # Resolve debian/control and install actual build dependencies (replacing mk-build-deps)
+              apt-get build-dep -y .
+              
+              echo '=== Auto-Versioning ==='
+              PKG_TIMESTAMP=\$(date +'%Y%m%d%H%M')
+              
+              gbp dch --ignore-branch \
+                      --new-version=\"\${CLEAN_VER}-drblsid~\${PKG_TIMESTAMP}\" \
+                      --distribution=\"unstable\" \
+                      --release \
+                      --spawn-editor=never \
+                      --auto
+              
+              UPSTREAM_VER=\$(dpkg-parsechangelog -S Version | sed 's/-.*//' | sed 's/~.*//')
+              
+              echo '=== Building SOURCE and Binary ==='
+              tar --exclude=debian -czf ../partclone_\${UPSTREAM_VER}.orig.tar.gz .
+              dpkg-buildpackage -us -uc
+              
+              mkdir -p /src/output-debs
+              cp ../*.deb ../*.orig.tar.gz ../*.dsc ../*.debian.tar.xz ../*.changes /src/output-debs/ || true
+              chmod -R 777 /src/output-debs/
+            "
+
+      - name: Generate Timestamp
+        id: time
+        env:
+          TZ: Asia/Taipei
+        run: echo "timestamp=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Upload .deb to GitHub Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: partclone-sid-packages-${{ matrix.arch }}-${{ steps.time.outputs.timestamp }}
+          path: partclone-src/output-debs/
+
+      - name: Deploy to file Server
+        env:
+          SSH_KEY: ${{ secrets.REMOTE_SSH_KEY }}
+          HOST: ${{ secrets.REMOTE_HOST }}
+          USER: ${{ secrets.REMOTE_USER }}
+          DEST: ${{ secrets.REMOTE_PATH }}
+        if: env.SSH_KEY != ''
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
+          rsync -avz -e "ssh -i ~/.ssh/id_rsa" partclone-src/output-debs/ $USER@$HOST:$DEST
+
+      - name: Send Telegram Notification (Success)
+        if: success()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            ✅ SUCCESS: Partclone Debian Sid (${{ matrix.arch }}) Auto-Build
+            
+            📦 Project: ${{ github.repository }}
+            ⏱️ Timestamp: ${{ steps.time.outputs.timestamp }}
+            🔗 Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Send Telegram Notification (Failure)
+        if: failure()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            ❌ FAILED: Partclone Debian Sid (${{ matrix.arch }}) Auto-Build
+            
+            The build crashed! Please check the logs to see if a dependency is broken.
+            📦 Project: ${{ github.repository }}
+            🔗 Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
