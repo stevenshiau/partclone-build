@@ -150,7 +150,7 @@ jobs:
               
               echo '=== Building SOURCE and Binary ==='
               tar --exclude='./debian' --exclude='./.git' -czf ../partclone_${UPSTREAM_VER}.orig.tar.gz .
-              dpkg-buildpackage -us -uc
+              dpkg-buildpackage -us -uc --source-option=--auto-commit
               
               mkdir -p /src/output-debs
               cp ../*.deb ../*.orig.tar.gz ../*.dsc ../*.debian.tar.xz ../*.changes /src/output-debs/ || true
