@@ -65,7 +65,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64, riscv64]
+        arch: [amd64] # Restricted strictly to amd64
         
     steps:
       - name: Checkout Upstream Code
