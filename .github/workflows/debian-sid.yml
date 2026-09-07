@@ -153,7 +153,11 @@ jobs:
               dpkg-buildpackage -us -uc -b
               
               mkdir -p /src/output-debs
-              cp ../*.deb ../*.orig.tar.gz ../*.dsc ../*.debian.tar.xz ../*.changes /src/output-debs/ || true
+              cp ../*.deb /src/output-debs/
+              cp ../*.orig.tar.gz /src/output-debs/ 2>/dev/null || true
+              cp ../*.dsc /src/output-debs/ 2>/dev/null || true
+              cp ../*.debian.tar.xz /src/output-debs/ 2>/dev/null || true
+              cp ../*.changes /src/output-debs/ 2>/dev/null || true
               chmod -R 777 /src/output-debs/
             "
 
