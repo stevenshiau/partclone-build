@@ -24,7 +24,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 1. Fetch Latest Upstream Tag for partclone
+          # 1. Fetch Latest Upstream Tag for partclone (Ignoring text tags like 'stable')
           LATEST_TAG=$(gh api repos/Thomas-Tsai/partclone/tags --jq 'map(select(.name | test("^v?[0-9]"))) | .[0].name')
           echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
           
@@ -130,10 +130,7 @@ jobs:
               CLEAN_VER=\$(echo \$UPSTREAM_TAG | sed 's/^v//')
               git archive --format=tar HEAD | tar xf -
               
-              # If partclone uses Autotools, generating the configure script might be needed
-              # autoreconf -fi || true
-              
-              # Resolve debian/control and install actual build dependencies (replacing mk-build-deps)
+              # Resolve debian/control and install actual build dependencies
               apt-get build-dep -y .
               
               echo '=== Auto-Versioning ==='
@@ -148,19 +145,39 @@ jobs:
               
               UPSTREAM_VER=\$(dpkg-parsechangelog -S Version | sed 's/-.*//' | sed 's/~.*//')
               
-              echo '=== Building SOURCE and Binary ==='
-              tar --exclude='./debian' --exclude='./.git' -czf ../partclone_${UPSTREAM_VER}.orig.tar.gz .
+              echo '=== Building SOURCE and Dynamic Binary ==='
+              tar --exclude='./debian' --exclude='./.git' -czf ../partclone_\${UPSTREAM_VER}.orig.tar.gz .
               dpkg-buildpackage -us -uc -b
               
+              mkdir -p /src/output-debs
+              
+              # 1. Safely store the dynamic .deb so it isn't overwritten
+              mv ../*.deb /src/output-debs/
+              
+              echo '=== CLEANING DIRTY BUILD TREE ==='
+              # 2. Manually wipe the compiled dynamic objects! 
+              # If we do not do this, the static linker will crash trying to link dynamic .o files.
+              make clean || true
+              find . -name \"*.o\" -type f -delete
+              find . -name \"*.lo\" -type f -delete
+              
               echo '=== Building Statically Linked Package ==='
+              # 3. Build the static version from scratch
               PARTCLONE_STATIC=1 dpkg-buildpackage -us -uc -b
               
-              mkdir -p /src/output-debs
-              cp ../*.deb /src/output-debs/
+              # 4. Rename the static .deb so you can easily identify it
+              for f in ../*.deb; do
+                if [ -f \"\$f\" ]; then
+                  mv \"\$f\" \"/src/output-debs/\$(basename \"\$f\" .deb)-static.deb\"
+                fi
+              done
+              
+              # Copy remaining packaging artifacts
               cp ../*.orig.tar.gz /src/output-debs/ 2>/dev/null || true
               cp ../*.dsc /src/output-debs/ 2>/dev/null || true
               cp ../*.debian.tar.xz /src/output-debs/ 2>/dev/null || true
               cp ../*.changes /src/output-debs/ 2>/dev/null || true
+              
               chmod -R 777 /src/output-debs/
             "
 
