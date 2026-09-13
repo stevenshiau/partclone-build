@@ -148,6 +148,9 @@ jobs:
               echo '=== Building SOURCE and Binary ==='
               tar --exclude='./debian' --exclude='./.git' -czf ../partclone_\${UPSTREAM_VER}.orig.tar.gz .
               dpkg-buildpackage -us -uc -b
+
+              echo '=== Building Statically Linked Package ==='
+              PARTCLONE_STATIC=1 dpkg-buildpackage -us -uc -b
               
               mkdir -p /src/output-debs
               cp ../*.deb /src/output-debs/
