@@ -107,6 +107,10 @@ jobs:
 
               # Swap APT sources to Stonking and perform a dist-upgrade
               sed -i 's/resolute/stonking/g' /etc/apt/sources.list.d/ubuntu.sources
+
+              # Force APT to prefer Stonking versions even if it requires downgrading installed packages
+              printf 'Package: *\nPin: release a=stonking\nPin-Priority: 1001\n' > /etc/apt/preferences.d/pin-stonking
+
               apt-get update
               apt-get dist-upgrade -y --allow-downgrades
               apt-get autoremove -y
