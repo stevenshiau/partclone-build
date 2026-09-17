@@ -104,13 +104,15 @@ jobs:
               set -e
               export DEBIAN_FRONTEND=noninteractive
               export EDITOR=/bin/true  # Prevent gbp dch from crashing due to missing editor
-              
+
+              # Swap APT sources to Stonking and perform a dist-upgrade
+              sed -i 's/resolute/stonking/g' /etc/apt/sources.list.d/ubuntu.sources
               apt-get update
-              apt-get dist-upgrade -y || true
+              apt-get dist-upgrade -y --allow-downgrades
               apt-get autoremove -y
               
-              # Install base packaging tools
-              apt-get install -y --no-install-recommends devscripts equivs build-essential dh-python git-buildpackage git tar libdistro-info-perl
+              # Now install your build tools
+              apt-get install -y --allow-downgrades --no-install-recommends devscripts equivs build-essential dh-python git-buildpackage git tar libdistro-info-perl
               
               mkdir -p /build
               cp -a /src/. /build/
