@@ -115,8 +115,9 @@ jobs:
               apt-get dist-upgrade -y --allow-downgrades
               apt-get autoremove -y
               
-              # Now install your build tools
-              apt-get install -y --allow-downgrades --no-install-recommends devscripts equivs build-essential dh-python git-buildpackage git tar libdistro-info-perl
+              '''              # Now install your build tools
+                            apt-get install -y --allow-downgrades --no-install-recommends devscripts equivs build-essential dh-python git-buildpackage git tar libdistro-info-perl
+                            apt-get install -y libjitterentropy-dev || true''
               
               mkdir -p /build
               cp -a /src/. /build/
@@ -155,11 +156,35 @@ jobs:
               tar --exclude='./debian' --exclude='./.git' -czf ../partclone_\${UPSTREAM_VER}.orig.tar.gz .
               dpkg-buildpackage -us -uc -b
 
-              echo '=== Building Statically Linked Package ==='
-              PARTCLONE_STATIC=1 dpkg-buildpackage -us -uc -b
-              
-              mkdir -p /src/output-debs
-              cp ../*.deb /src/output-debs/
+              '''              # 1. Safely store the dynamic .deb so it isn't overwritten
+                            mv ../*.deb /src/output-debs/
+
+                            echo '=== CLEANING DIRTY BUILD TREE ==='
+                            # 2. Manually wipe the compiled dynamic objects! 
+                            # If we do not do this, the static linker will crash trying to link dynamic .o files.
+                            make clean || true
+                            find . -name "*.o" -type f -delete
+                            find . -name "*.lo" -type f -delete
+
+                            echo '=== Building Statically Linked Package ==='
+                            # 3. Build the static version from scratch
+                            if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
+                              sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
+                            fi
+                            # Prevent symbol collision with zlib 1.3.2+ crc32 during static linking
+                            if [ -f src/checksum.h ] && [ -f src/checksum.c ] && [ -f src/partclone.c ]; then
+                              sed -i 's/crc32/pc_crc32/g' src/checksum.h src/checksum.c src/partclone.c
+                            fi
+                            PARTCLONE_STATIC=1 dpkg-buildpackage -us -uc -b
+
+                            # 4. Rename the static .deb so you can easily identify it
+                            for f in ../*.deb; do
+                              if [ -f "$f" ]; then
+                                mv "$f" "/src/output-debs/$(basename "$f" .deb)-static.deb"
+                              fi
+                            done
+
+                            # Copy remaining packaging artifacts''
               cp ../*.orig.tar.gz /src/output-debs/ 2>/dev/null || true
               cp ../*.dsc /src/output-debs/ 2>/dev/null || true
               cp ../*.debian.tar.xz /src/output-debs/ 2>/dev/null || true
