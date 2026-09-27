@@ -135,8 +135,8 @@ jobs:
               apt-get build-dep -y .
               
               # Prevent symbol collision with zlib 1.3.2+ crc32 during static linking
-              if [ -f src/checksum.h ] && ! grep -q 'pc_crc32' src/checksum.h; then
-                sed -i '1i#define crc32 pc_crc32' src/checksum.h
+              if [ -f src/checksum.h ] && [ -f src/checksum.c ] && [ -f src/partclone.c ]; then
+                sed -i 's/\bcrc32\b/pc_crc32/g' src/checksum.h src/checksum.c src/partclone.c
               fi
               
               echo '=== Auto-Versioning ==='
