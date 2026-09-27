@@ -109,9 +109,9 @@ jobs:
               apt-get dist-upgrade -y || true
               apt-get autoremove -y
               
-              '''              # Install base packaging tools
-                            apt-get install -y --no-install-recommends devscripts equivs build-essential dh-python git-buildpackage git tar libdistro-info-perl
-                            apt-get install -y libjitterentropy-dev || true''
+              # Install base packaging tools
+              apt-get install -y --no-install-recommends devscripts equivs build-essential dh-python git-buildpackage git tar libdistro-info-perl
+              apt-get install -y libjitterentropy3-dev || apt-get install -y libjitterentropy-dev || true
               
               mkdir -p /build
               cp -a /src/. /build/
@@ -128,11 +128,13 @@ jobs:
               CLEAN_VER=\$(echo \$UPSTREAM_TAG | sed 's/^v//')
               git archive --format=tar HEAD | tar xf -
               
-              # If partclone uses Autotools, generating the configure script might be needed
-              # autoreconf -fi || true
-              
-              # Resolve debian/control and install actual build dependencies (replacing mk-build-deps)
+              # Resolve debian/control and install actual build dependencies
               apt-get build-dep -y .
+              
+              # Prevent symbol collision with zlib 1.3.2+ crc32 during static linking
+              if [ -f src/checksum.h ] && [ -f src/checksum.c ] && [ -f src/partclone.c ]; then
+                sed -i 's/\bcrc32\b/pc_crc32/g' src/checksum.h src/checksum.c src/partclone.c
+              fi
               
               echo '=== Auto-Versioning ==='
               PKG_TIMESTAMP=\$(date +'%Y%m%d%H%M')
@@ -146,39 +148,37 @@ jobs:
               
               UPSTREAM_VER=\$(dpkg-parsechangelog -S Version | sed 's/-.*//' | sed 's/~.*//')
               
-              echo '=== Building SOURCE and Binary ==='
+              echo '=== Building SOURCE and Dynamic Binary ==='
               tar --exclude='./debian' --exclude='./.git' -czf ../partclone_\${UPSTREAM_VER}.orig.tar.gz .
               dpkg-buildpackage -us -uc -b
               
-              '''              # 1. Safely store the dynamic .deb so it isn't overwritten
-                            mv ../*.deb /src/output-debs/
-
-                            echo '=== CLEANING DIRTY BUILD TREE ==='
-                            # 2. Manually wipe the compiled dynamic objects! 
-                            # If we do not do this, the static linker will crash trying to link dynamic .o files.
-                            make clean || true
-                            find . -name "*.o" -type f -delete
-                            find . -name "*.lo" -type f -delete
-
-                            echo '=== Building Statically Linked Package ==='
-                            # 3. Build the static version from scratch
-                            if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
-                              sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
-                            fi
-                            # Prevent symbol collision with zlib 1.3.2+ crc32 during static linking
-                            if [ -f src/checksum.h ] && [ -f src/checksum.c ] && [ -f src/partclone.c ]; then
-                              sed -i 's/crc32/pc_crc32/g' src/checksum.h src/checksum.c src/partclone.c
-                            fi
-                            PARTCLONE_STATIC=1 dpkg-buildpackage -us -uc -b
-
-                            # 4. Rename the static .deb so you can easily identify it
-                            for f in ../*.deb; do
-                              if [ -f "$f" ]; then
-                                mv "$f" "/src/output-debs/$(basename "$f" .deb)-static.deb"
-                              fi
-                            done
-
-                            # Copy remaining packaging artifacts''
+              mkdir -p /src/output-debs
+              
+              # 1. Safely store the dynamic .deb so it isn't overwritten
+              mv ../*.deb /src/output-debs/
+              
+              echo '=== CLEANING DIRTY BUILD TREE ==='
+              # 2. Manually wipe the compiled dynamic objects! 
+              # If we do not do this, the static linker will crash trying to link dynamic .o files.
+              make clean || true
+              find . -name \"*.o\" -type f -delete
+              find . -name \"*.lo\" -type f -delete
+              
+              echo '=== Building Statically Linked Package ==='
+              # 3. Build the static version from scratch
+              if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
+                sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
+              fi
+              PARTCLONE_STATIC=1 dpkg-buildpackage -us -uc -b
+              
+              # 4. Rename the static .deb so you can easily identify it
+              for f in ../*.deb; do
+                if [ -f \"\$f\" ]; then
+                  mv \"\$f\" \"/src/output-debs/\$(basename \"\$f\" .deb)-static.deb\"
+                fi
+              done
+              
+              # Copy remaining packaging artifacts
               cp ../*.orig.tar.gz /src/output-debs/ 2>/dev/null || true
               cp ../*.dsc /src/output-debs/ 2>/dev/null || true
               cp ../*.debian.tar.xz /src/output-debs/ 2>/dev/null || true
