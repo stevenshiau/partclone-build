@@ -49,12 +49,36 @@ jobs:
       - name: Decide to Build
         id: decision
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "${{ steps.cache-check.outputs.cache-hit }}" != "true" ]] || [[ "${{ env.FORCE_BUILD }}" == "true" ]]; then
+          echo "=== Evaluating Trigger Criteria ==="
+          echo "Event Name:  ${{ github.event_name }}"
+          echo "Force Build: ${{ env.FORCE_BUILD }}"
+          echo "Cache Hit:   ${{ steps.cache-check.outputs.cache-hit }}"
+          echo "Fingerprint: ${{ steps.check.outputs.fingerprint }}"
+          echo "===================================="
+
+          reasons=()
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            reasons+=("Manual workflow dispatch trigger")
+          fi
+          if [[ "${{ env.FORCE_BUILD }}" == "true" ]]; then
+            reasons+=("FORCE_BUILD is enabled (true)")
+          fi
+          if [[ "${{ steps.cache-check.outputs.cache-hit }}" != "true" ]]; then
+            reasons+=("Cache miss (new upstream tag or updated dependencies: ${{ steps.check.outputs.fingerprint }})")
+          fi
+
+          if [ ${#reasons[@]} -gt 0 ]; then
             echo "needs_build=true" >> $GITHUB_OUTPUT
             echo "${{ steps.check.outputs.fingerprint }}" > last-build-fingerprint.txt
+            echo "Decision: BUILD TRIGGERED"
+            echo "Trigger Reason(s):"
+            for r in "${reasons[@]}"; do
+              echo "  - $r"
+            done
           else
             echo "needs_build=false" >> $GITHUB_OUTPUT
-            echo "This exact combination of upstream tag and dependencies has already been built."
+            echo "Decision: BUILD SKIPPED"
+            echo "Reason: This exact combination of upstream tag and dependencies has already been built (cache hit, FORCE_BUILD=false)."
           fi
 
   build:
