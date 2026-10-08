@@ -18,6 +18,7 @@ jobs:
     outputs:
       needs_build: ${{ steps.decision.outputs.needs_build }}
       latest_tag: ${{ steps.check.outputs.tag }}
+      pkg_timestamp: ${{ steps.decision.outputs.pkg_timestamp }}
     steps:
       - name: Fetch Upstream Tag and Dependencies
         id: check
@@ -70,6 +71,7 @@ jobs:
           if [ ${#reasons[@]} -gt 0 ]; then
             echo "needs_build=true" >> $GITHUB_OUTPUT
             echo "${{ steps.check.outputs.fingerprint }}" > last-build-fingerprint.txt
+            echo "pkg_timestamp=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
             echo "Decision: BUILD TRIGGERED"
             echo "Trigger Reason(s):"
             for r in "${reasons[@]}"; do
@@ -124,6 +126,8 @@ jobs:
             -e DEBEMAIL="actions@github.com" \
             -e DEB_BUILD_OPTIONS="noautodbgsym" \
             -e UPSTREAM_TAG="${{ needs.check-triggers.outputs.latest_tag }}" \
+            -e PKG_TIMESTAMP="${{ needs.check-triggers.outputs.pkg_timestamp }}" \
+            -e ARCH="${{ matrix.arch }}" \
             debian:sid /bin/bash -c "
               set -e
               export DEBIAN_FRONTEND=noninteractive
@@ -155,12 +159,15 @@ jobs:
               CLEAN_VER=\$(echo \$UPSTREAM_TAG | sed 's/^v//')
               git archive --format=tar HEAD | tar xf -
               
+              # Commit the modified tracked files so dpkg-source does not abort the build
+              git add src/version.h toolbox 2>/dev/null || true
+              git commit -m \"Inject version tag into source tree\" || true
+              
               # Resolve debian/control and install actual build dependencies
               apt-get build-dep -y .
               
               echo '=== Auto-Versioning ==='
-              PKG_TIMESTAMP=\$(date +'%Y%m%d%H%M')
-              
+              # Tell gbp to build the exact version string using the unified timestamp from check-triggers
               gbp dch --ignore-branch \
                       --new-version=\"\${CLEAN_VER}-drblsid~\${PKG_TIMESTAMP}\" \
                       --distribution=\"unstable\" \
@@ -170,37 +177,62 @@ jobs:
               
               UPSTREAM_VER=\$(dpkg-parsechangelog -S Version | sed 's/-.*//' | sed 's/~.*//')
               
-              echo '=== Building SOURCE and Dynamic Binary ==='
-              tar --exclude='./debian' --exclude='./.git' -czf ../partclone_\${UPSTREAM_VER}.orig.tar.gz .
-              dpkg-buildpackage -us -uc -b
-              
               mkdir -p /src/output-debs
               
-              # 1. Safely store the dynamic .deb so it isn't overwritten
-              mv ../*.deb /src/output-debs/
-              
-              echo '=== CLEANING DIRTY BUILD TREE ==='
-              # 2. Manually wipe the compiled dynamic objects! 
-              # If we do not do this, the static linker will crash trying to link dynamic .o files.
-              make clean || true
-              find . -name \"*.o\" -type f -delete
-              find . -name \"*.lo\" -type f -delete
-              
-              echo '=== Building Statically Linked Package ==='
-              # 3. Build the static version from scratch
-              if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
-                sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
+              # Only amd64 builds the source package to prevent conflicting orig tarballs and race conditions
+              if [ \"\$ARCH\" = \"amd64\" ]; then
+                echo '=== Building Source and Dynamic Binary (amd64) ==='
+                tar --exclude=.git --exclude=debian -czf ../partclone_\${UPSTREAM_VER}.orig.tar.gz .
+                dpkg-buildpackage -us -uc --source-option=--auto-commit
+                
+                # 1. Safely store the dynamic .deb so it isn't overwritten
+                mv ../*.deb /src/output-debs/
+                
+                # Copy source package artifacts
+                cp ../*.orig.tar.gz /src/output-debs/ || true
+                cp ../*.dsc /src/output-debs/ || true
+                cp ../*.debian.tar.xz /src/output-debs/ || true
+                
+                echo '=== CLEANING DIRTY BUILD TREE ==='
+                # 2. Manually wipe the compiled dynamic objects!
+                make clean || true
+                find . -name \"*.o\" -type f -delete
+                find . -name \"*.lo\" -type f -delete
+                
+                echo '=== Building Statically Linked Package (amd64) ==='
+                # 3. Build the static version from scratch
+                if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
+                  sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
+                fi
+                PARTCLONE_STATIC=1 dpkg-buildpackage -b -us -uc
+                
+                # 4. Store the static .deb
+                mv ../*.deb /src/output-debs/
+              else
+                echo \"=== Building Dynamic Binary Only (\$ARCH) ===\"
+                dpkg-buildpackage -b -us -uc
+                
+                # 1. Safely store the dynamic .deb so it isn't overwritten
+                mv ../*.deb /src/output-debs/
+                
+                echo '=== CLEANING DIRTY BUILD TREE ==='
+                # 2. Manually wipe the compiled dynamic objects!
+                make clean || true
+                find . -name \"*.o\" -type f -delete
+                find . -name \"*.lo\" -type f -delete
+                
+                echo \"=== Building Statically Linked Package (\$ARCH) ===\"
+                # 3. Build the static version from scratch
+                if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
+                  sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
+                fi
+                PARTCLONE_STATIC=1 dpkg-buildpackage -b -us -uc
+                
+                # 4. Store the static .deb
+                mv ../*.deb /src/output-debs/
               fi
-              PARTCLONE_STATIC=1 dpkg-buildpackage -us -uc -b
               
-              # 4. Store the static .deb
-              mv ../*.deb /src/output-debs/
-              
-              # Copy remaining packaging artifacts
-              cp ../*.orig.tar.gz /src/output-debs/ 2>/dev/null || true
-              cp ../*.dsc /src/output-debs/ 2>/dev/null || true
-              cp ../*.debian.tar.xz /src/output-debs/ 2>/dev/null || true
-              cp ../*.changes /src/output-debs/ 2>/dev/null || true
+              cp ../*.changes /src/output-debs/ || true
               
               chmod -R 777 /src/output-debs/
             "
