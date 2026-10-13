@@ -8,9 +8,16 @@ on:
   schedule:
     - cron: '37 20 * * *' # Avoid peak hours, runs around 04:37 AM Taipei Time
   workflow_dispatch:
+    inputs:
+      build_static:
+        description: 'Build statically linked package'
+        required: false
+        type: boolean
+        default: false
 
 env:
   FORCE_BUILD: "false"
+  BUILD_STATIC: "false"
 
 jobs:
   check-triggers:
@@ -19,6 +26,7 @@ jobs:
       needs_build: ${{ steps.decision.outputs.needs_build }}
       latest_tag: ${{ steps.check.outputs.tag }}
       pkg_timestamp: ${{ steps.decision.outputs.pkg_timestamp }}
+      build_static: ${{ steps.decision.outputs.build_static }}
     steps:
       - name: Fetch Upstream Tag and Dependencies
         id: check
@@ -50,11 +58,21 @@ jobs:
       - name: Decide to Build
         id: decision
         run: |
+          BUILD_STATIC="${{ env.BUILD_STATIC }}"
+          if [ -z "$BUILD_STATIC" ]; then
+            BUILD_STATIC="false"
+          fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.build_static }}" ]]; then
+            BUILD_STATIC="${{ inputs.build_static }}"
+          fi
+          echo "build_static=$BUILD_STATIC" >> $GITHUB_OUTPUT
+
           echo "=== Evaluating Trigger Criteria ==="
-          echo "Event Name:  ${{ github.event_name }}"
-          echo "Force Build: ${{ env.FORCE_BUILD }}"
-          echo "Cache Hit:   ${{ steps.cache-check.outputs.cache-hit }}"
-          echo "Fingerprint: ${{ steps.check.outputs.fingerprint }}"
+          echo "Event Name:   ${{ github.event_name }}"
+          echo "Force Build:  ${{ env.FORCE_BUILD }}"
+          echo "Build Static: $BUILD_STATIC"
+          echo "Cache Hit:    ${{ steps.cache-check.outputs.cache-hit }}"
+          echo "Fingerprint:  ${{ steps.check.outputs.fingerprint }}"
           echo "===================================="
 
           reasons=()
@@ -127,6 +145,7 @@ jobs:
             -e DEB_BUILD_OPTIONS="noautodbgsym" \
             -e UPSTREAM_TAG="${{ needs.check-triggers.outputs.latest_tag }}" \
             -e PKG_TIMESTAMP="${{ needs.check-triggers.outputs.pkg_timestamp }}" \
+            -e BUILD_STATIC="${{ needs.check-triggers.outputs.build_static }}" \
             -e ARCH="${{ matrix.arch }}" \
             debian:sid /bin/bash -c "
               set -e
@@ -193,43 +212,51 @@ jobs:
                 cp ../*.dsc /src/output-debs/ || true
                 cp ../*.debian.tar.xz /src/output-debs/ || true
                 
-                echo '=== CLEANING DIRTY BUILD TREE ==='
-                # 2. Manually wipe the compiled dynamic objects!
-                make clean || true
-                find . -name \"*.o\" -type f -delete
-                find . -name \"*.lo\" -type f -delete
-                
-                echo '=== Building Statically Linked Package (amd64) ==='
-                # 3. Build the static version from scratch
-                if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
-                  sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
+                if [ \"\$BUILD_STATIC\" = \"true\" ]; then
+                  echo '=== CLEANING DIRTY BUILD TREE ==='
+                  # 2. Manually wipe the compiled dynamic objects!
+                  make clean || true
+                  find . -name \"*.o\" -type f -delete
+                  find . -name \"*.lo\" -type f -delete
+
+                  echo '=== Building Statically Linked Package (amd64) ==='
+                  # 3. Build the static version from scratch
+                  if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
+                    sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
+                  fi
+                  PARTCLONE_STATIC=1 dpkg-buildpackage -b -us -uc
+
+                  # 4. Store the static .deb
+                  mv ../*.deb /src/output-debs/
+                else
+                  echo '=== Skipping Statically Linked Package (BUILD_STATIC is not true) ==='
                 fi
-                PARTCLONE_STATIC=1 dpkg-buildpackage -b -us -uc
-                
-                # 4. Store the static .deb
-                mv ../*.deb /src/output-debs/
               else
                 echo \"=== Building Dynamic Binary Only (\$ARCH) ===\"
                 dpkg-buildpackage -b -us -uc
-                
+
                 # 1. Safely store the dynamic .deb so it isn't overwritten
                 mv ../*.deb /src/output-debs/
-                
-                echo '=== CLEANING DIRTY BUILD TREE ==='
-                # 2. Manually wipe the compiled dynamic objects!
-                make clean || true
-                find . -name \"*.o\" -type f -delete
-                find . -name \"*.lo\" -type f -delete
-                
-                echo \"=== Building Statically Linked Package (\$ARCH) ===\"
-                # 3. Build the static version from scratch
-                if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
-                  sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
+
+                if [ \"\$BUILD_STATIC\" = \"true\" ]; then
+                  echo '=== CLEANING DIRTY BUILD TREE ==='
+                  # 2. Manually wipe the compiled dynamic objects!
+                  make clean || true
+                  find . -name \"*.o\" -type f -delete
+                  find . -name \"*.lo\" -type f -delete
+
+                  echo \"=== Building Statically Linked Package (\$ARCH) ===\"
+                  # 3. Build the static version from scratch
+                  if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
+                    sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
+                  fi
+                  PARTCLONE_STATIC=1 dpkg-buildpackage -b -us -uc
+
+                  # 4. Store the static .deb
+                  mv ../*.deb /src/output-debs/
+                else
+                  echo \"=== Skipping Statically Linked Package for \$ARCH (BUILD_STATIC is not true) ===\"
                 fi
-                PARTCLONE_STATIC=1 dpkg-buildpackage -b -us -uc
-                
-                # 4. Store the static .deb
-                mv ../*.deb /src/output-debs/
               fi
               
               cp ../*.changes /src/output-debs/ || true
