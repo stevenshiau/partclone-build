@@ -109,7 +109,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64] # Restricted strictly to amd64
+        arch: [amd64, arm64, riscv64]
         
     steps:
       - name: Checkout Upstream Code
@@ -193,38 +193,67 @@ jobs:
               
               UPSTREAM_VER=\$(dpkg-parsechangelog -S Version | sed 's/-.*//' | sed 's/~.*//')
               
-              echo '=== Building Source and Dynamic Binary (amd64) ==='
-              tar --exclude=.git --exclude=debian -czf ../partclone_\${UPSTREAM_VER}.orig.tar.gz .
-              dpkg-buildpackage -us -uc --source-option=--auto-commit
-              
               mkdir -p /src/output-debs
               
-              # 1. Safely store the dynamic .deb so it isn't overwritten
-              mv ../*.deb /src/output-debs/
-              
-              # Copy source package artifacts
-              cp ../*.orig.tar.gz /src/output-debs/ || true
-              cp ../*.dsc /src/output-debs/ || true
-              cp ../*.debian.tar.xz /src/output-debs/ || true
+              # Only amd64 builds the source package to prevent conflicting orig tarballs and race conditions
+              if [ \"\$ARCH\" = \"amd64\" ]; then
+                echo '=== Building Source and Dynamic Binary (amd64) ==='
+                tar --exclude=.git --exclude=debian -czf ../partclone_\${UPSTREAM_VER}.orig.tar.gz .
+                dpkg-buildpackage -us -uc --source-option=--auto-commit
 
-              if [ \"\$BUILD_STATIC\" = \"true\" ]; then
-                echo '=== CLEANING DIRTY BUILD TREE ==='
-                # 2. Manually wipe the compiled dynamic objects!
-                make clean || true
-                find . -name \"*.o\" -type f -delete
-                find . -name \"*.lo\" -type f -delete
-
-                echo '=== Building Statically Linked Package (amd64) ==='
-                # 3. Build the static version from scratch
-                if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
-                  sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
-                fi
-                PARTCLONE_STATIC=1 dpkg-buildpackage -b -us -uc
-
-                # 4. Store the static .deb
+                # 1. Safely store the dynamic .deb so it isn't overwritten
                 mv ../*.deb /src/output-debs/
+
+                # Copy source package artifacts
+                cp ../*.orig.tar.gz /src/output-debs/ || true
+                cp ../*.dsc /src/output-debs/ || true
+                cp ../*.debian.tar.xz /src/output-debs/ || true
+
+                if [ \"\$BUILD_STATIC\" = \"true\" ]; then
+                  echo '=== CLEANING DIRTY BUILD TREE ==='
+                  # 2. Manually wipe the compiled dynamic objects!
+                  make clean || true
+                  find . -name \"*.o\" -type f -delete
+                  find . -name \"*.lo\" -type f -delete
+
+                  echo '=== Building Statically Linked Package (amd64) ==='
+                  # 3. Build the static version from scratch
+                  if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
+                    sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
+                  fi
+                  PARTCLONE_STATIC=1 dpkg-buildpackage -b -us -uc
+
+                  # 4. Store the static .deb
+                  mv ../*.deb /src/output-debs/
+                else
+                  echo '=== Skipping Statically Linked Package (BUILD_STATIC is not true) ==='
+                fi
               else
-                echo '=== Skipping Statically Linked Package (BUILD_STATIC is not true) ==='
+                echo \"=== Building Dynamic Binary Only (\$ARCH) ===\"
+                dpkg-buildpackage -b -us -uc
+
+                # 1. Safely store the dynamic .deb so it isn't overwritten
+                mv ../*.deb /src/output-debs/
+
+                if [ \"\$BUILD_STATIC\" = \"true\" ]; then
+                  echo '=== CLEANING DIRTY BUILD TREE ==='
+                  # 2. Manually wipe the compiled dynamic objects!
+                  make clean || true
+                  find . -name \"*.o\" -type f -delete
+                  find . -name \"*.lo\" -type f -delete
+
+                  echo \"=== Building Statically Linked Package (\$ARCH) ===\"
+                  # 3. Build the static version from scratch
+                  if ls /usr/lib/*/libjitterentropy.a >/dev/null 2>&1 || [ -f /usr/lib/libjitterentropy.a ]; then
+                    sed -i 's/STATIC_OPT = --enable-static-linking/STATIC_OPT = --enable-static-linking LIBS=-ljitterentropy/' debian/rules
+                  fi
+                  PARTCLONE_STATIC=1 dpkg-buildpackage -b -us -uc
+
+                  # 4. Store the static .deb
+                  mv ../*.deb /src/output-debs/
+                else
+                  echo \"=== Skipping Statically Linked Package for \$ARCH (BUILD_STATIC is not true) ===\"
+                fi
               fi
               
               cp ../*.changes /src/output-debs/ || true
