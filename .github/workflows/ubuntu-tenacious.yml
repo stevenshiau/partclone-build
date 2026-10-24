@@ -1,4 +1,4 @@
-name: Ubuntu Resolute Auto-Build
+name: Ubuntu Tenacious Auto-Build
 
 on:
   push:
@@ -37,14 +37,14 @@ jobs:
           LATEST_TAG=$(gh api repos/Thomas-Tsai/partclone/tags --jq 'map(select(.name | test("^v?[0-9]"))) | .[0].name')
           echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
           
-          # 2. Fetch Latest Resolute Versions for partclone core dependencies
+          # 2. Fetch Latest Tenacious Versions for partclone core dependencies
           # [!] Replace these packages with partclone's actual Build-Depends (e.g., uuid-dev, libblkid-dev, etc.)
           BASE_URL="https://people.canonical.com/~ubuntu-archive/madison.cgi"
-          DEP1_VER=$(curl -s "${BASE_URL}?package=uuid-dev&s=resolute&text=on" | awk '{print $3}' | head -n 1)
-          DEP2_VER=$(curl -s "${BASE_URL}?package=libblkid-dev&s=resolute&text=on" | awk '{print $3}' | head -n 1)
+          DEP1_VER=$(curl -s "${BASE_URL}?package=uuid-dev&s=tenacious&text=on" | awk '{print $3}' | head -n 1)
+          DEP2_VER=$(curl -s "${BASE_URL}?package=libblkid-dev&s=tenacious&text=on" | awk '{print $3}' | head -n 1)
           
           # 3. Create Combined Fingerprint
-          FINGERPRINT="resolute-tag${LATEST_TAG}-dep1${DEP1_VER}-dep2${DEP2_VER}"
+          FINGERPRINT="tenacious-tag${LATEST_TAG}-dep1${DEP1_VER}-dep2${DEP2_VER}"
           echo "Combined Fingerprint: $FINGERPRINT"
           echo "fingerprint=$FINGERPRINT" >> $GITHUB_OUTPUT
 
@@ -53,7 +53,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: last-build-fingerprint.txt
-          key: build-cache-resolute-${{ steps.check.outputs.fingerprint }}
+          key: build-cache-tenacious-${{ steps.check.outputs.fingerprint }}
 
       - name: Decide to Build
         id: decision
@@ -147,17 +147,23 @@ jobs:
             -e PKG_TIMESTAMP="${{ needs.check-triggers.outputs.pkg_timestamp }}" \
             -e BUILD_STATIC="${{ needs.check-triggers.outputs.build_static }}" \
             -e ARCH="${{ matrix.arch }}" \
-            ubuntu:resolute /bin/bash -c "
+            ubuntu:devel /bin/bash -c "
               set -e
               export DEBIAN_FRONTEND=noninteractive
               export EDITOR=/bin/true  # Prevent gbp dch from crashing due to missing editor
-              
+
+              # Swap APT sources to Tenacious and perform a dist-upgrade
+              sed -i 's/stonking/tenacious/g' /etc/apt/sources.list.d/ubuntu.sources
+
+              # Force APT to prefer Tenacious versions even if it requires downgrading installed packages
+              printf 'Package: *\nPin: release a=tenacious\nPin-Priority: 1001\n' > /etc/apt/preferences.d/pin-tenacious
+
               apt-get update
-              apt-get dist-upgrade -y || true
+              apt-get dist-upgrade -y --allow-downgrades
               apt-get autoremove -y
               
-              # Install base packaging tools
-              apt-get install -y --no-install-recommends devscripts equivs build-essential dh-python git-buildpackage git tar libdistro-info-perl
+              # Now install your build tools
+              apt-get install -y --allow-downgrades --no-install-recommends devscripts equivs build-essential dh-python git-buildpackage git tar libdistro-info-perl
               apt-get install -y libjitterentropy3-dev || apt-get install -y libjitterentropy-dev || true
               
               mkdir -p /build
@@ -185,7 +191,7 @@ jobs:
               echo '=== Auto-Versioning ==='
               # Tell gbp to build the exact version string using the unified timestamp from check-triggers
               gbp dch --ignore-branch \
-                      --new-version=\"\${CLEAN_VER}-drblresolute~\${PKG_TIMESTAMP}\" \
+                      --new-version=\"\${CLEAN_VER}-drbltenacious~\${PKG_TIMESTAMP}\" \
                       --distribution=\"unstable\" \
                       --release \
                       --spawn-editor=never \
@@ -241,7 +247,7 @@ jobs:
       - name: Upload .deb to GitHub Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: partclone-resolute-packages-${{ matrix.arch }}-${{ steps.time.outputs.timestamp }}
+          name: partclone-tenacious-packages-${{ matrix.arch }}-${{ steps.time.outputs.timestamp }}
           path: partclone-src/output-debs/
 
       - name: Deploy to file Server
@@ -265,7 +271,7 @@ jobs:
           to: ${{ secrets.TELEGRAM_TO }}
           token: ${{ secrets.TELEGRAM_TOKEN }}
           message: |
-            ✅ SUCCESS: Partclone Ubuntu Resolute (${{ matrix.arch }}) Auto-Build
+            ✅ SUCCESS: Partclone Ubuntu Tenacious (${{ matrix.arch }}) Auto-Build
             
             📦 Project: ${{ github.repository }}
             ⏱️ Timestamp: ${{ steps.time.outputs.timestamp }}
@@ -278,7 +284,7 @@ jobs:
           to: ${{ secrets.TELEGRAM_TO }}
           token: ${{ secrets.TELEGRAM_TOKEN }}
           message: |
-            ❌ FAILED: Partclone Ubuntu Resolute (${{ matrix.arch }}) Auto-Build
+            ❌ FAILED: Partclone Ubuntu Tenacious (${{ matrix.arch }}) Auto-Build
             
             The build crashed! Please check the logs to see if a dependency is broken.
             📦 Project: ${{ github.repository }}
