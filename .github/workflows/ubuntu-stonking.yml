@@ -152,6 +152,9 @@ jobs:
               export DEBIAN_FRONTEND=noninteractive
               export EDITOR=/bin/true  # Prevent gbp dch from crashing due to missing editor
               
+              # Add DRBL repository for libraries missing in official Ubuntu repository (e.g. libufs2, libvmfs, libjfs-dev)
+              echo 'deb [trusted=yes] https://free.nchc.org.tw/drbl-core drbl dev' > /etc/apt/sources.list.d/drbl-dev.list
+
               apt-get update
               apt-get dist-upgrade -y || true
               apt-get autoremove -y

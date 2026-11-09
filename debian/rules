@@ -45,13 +45,13 @@ CONFIG_OPTS = \
 	--enable-fat \
 	--enable-exfat \
 	--enable-ntfs \
-	--disable-ufs \
-	--disable-vmfs \
-	--disable-jfs \
+	--enable-ufs \
+	--enable-vmfs \
+	--enable-jfs \
 	--enable-btrfs \
 	--enable-minix \
 	--enable-f2fs \
-	--disable-nilfs2 \
+	--enable-nilfs2 \
 	$(STATIC_OPT)
 
 # isal support architectures

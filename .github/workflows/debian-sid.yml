@@ -154,7 +154,10 @@ jobs:
               
               # Completely forbid APT from installing systemd v260+ to prevent QEMU crashes
               printf \"Package: systemd systemd-sysv libsystemd0 udev libudev1\nPin: version 260*\nPin-Priority: -1\n\" > /etc/apt/preferences.d/prevent-systemd-260
-              
+
+              # Add DRBL repository for libraries missing in official Debian repository (e.g. libufs2, libvmfs, libjfs-dev)
+              echo 'deb [trusted=yes] https://free.nchc.org.tw/drbl-core drbl dev' > /etc/apt/sources.list.d/drbl-dev.list
+
               apt-get update
               apt-get dist-upgrade -y || true
               apt-get autoremove -y

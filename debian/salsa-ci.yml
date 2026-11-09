@@ -8,3 +8,6 @@
 ---
 include:
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/recipes/debian.yml
+
+variables:
+  SALSA_CI_EXTRA_REPOSITORY: "deb [trusted=yes] https://free.nchc.org.tw/drbl-core drbl dev"
