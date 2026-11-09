@@ -9,6 +9,10 @@
 # Uncomment this to turn on verbose mode.
 #export DH_VERBOSE=1
 
+# Ensure compatibility with GCC 15/16 (default -std=gnu23) for legacy jfs headers
+export DEB_CFLAGS_MAINT_APPEND = -std=gnu17
+export DEB_CPPFLAGS_MAINT_APPEND = -DHAVE_STDBOOL_H
+
 # Check if PARTCLONE_STATIC is set to 1 OR if "static" is in DEB_BUILD_OPTIONS
 ifneq (,$(filter static,$(DEB_BUILD_OPTIONS)))
     IS_STATIC = 1
