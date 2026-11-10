@@ -57,6 +57,7 @@ CONFIG_OPTS = \
 	--enable-btrfs \
 	--enable-minix \
 	--enable-f2fs \
+	$(ZFS_OPT) \
 	$(STATIC_OPT)
 
 # isal support architectures
