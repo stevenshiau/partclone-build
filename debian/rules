@@ -29,6 +29,11 @@ else
     STATIC_OPT =
 endif
 
+# zfs support is the clean-room parser (liblz4/zlib only; static-safe).
+# The CDDL-linked OpenZFS variant (--enable-openzfs) is intentionally not
+# shipped in the Debian package.
+ZFS_OPT = --enable-zfs
+
 %:
 	dh $@ --with autoreconf -p$(PKG_NAME)
 
