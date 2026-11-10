@@ -13,11 +13,11 @@ on:
         description: 'Build statically linked package'
         required: false
         type: boolean
-        default: false
+        default: true
 
 env:
   FORCE_BUILD: "false"
-  BUILD_STATIC: "false"
+  BUILD_STATIC: "true"
 
 jobs:
   check-triggers:
@@ -60,7 +60,7 @@ jobs:
         run: |
           BUILD_STATIC="${{ env.BUILD_STATIC }}"
           if [ -z "$BUILD_STATIC" ]; then
-            BUILD_STATIC="false"
+            BUILD_STATIC="true"
           fi
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.build_static }}" ]]; then
             BUILD_STATIC="${{ inputs.build_static }}"
